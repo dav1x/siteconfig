@@ -18,6 +18,8 @@ package clusterinstance
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +39,7 @@ var _ = Describe("Validate", func() {
 	var (
 		c          client.Client
 		ctx        = context.Background()
+		testLogger = zap.NewNop().Named("Test")
 		testParams = &TestParams{
 			BmcCredentialsName:  "bmh-secret",
 			ClusterName:         "test-cluster",
@@ -67,7 +70,7 @@ var _ = Describe("Validate", func() {
 	It("successfully validates a well-defined ClusterInstance", func() {
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -80,14 +83,14 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.Nodes[0].HostRef = &v1alpha1.HostRef{Name: "node1", Namespace: bmcCredential.Namespace}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		Expect(Validate(ctx, c, clusterInstance)).To(Succeed())
+		Expect(Validate(ctx, c, testLogger, clusterInstance)).To(Succeed())
 	})
 
 	It("fails validation when cluster name is not defined", func() {
 		clusterInstance.Spec.ClusterName = ""
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("missing cluster name")))
 	})
 
@@ -95,7 +98,7 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.ClusterImageSetNameRef = ""
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("clusterImageSetNameRef cannot be empty")))
 	})
 
@@ -103,7 +106,7 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.ClusterImageSetNameRef = doesNotExist
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err.Error()).To(ContainSubstring("encountered error validating ClusterImageSetNameRef"))
 	})
 
@@ -111,36 +114,36 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.TemplateRefs = []v1alpha1.TemplateRef{}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err.Error()).To(ContainSubstring("missing cluster-level TemplateRefs"))
 	})
 
-	It("fails validation due to missing pull secret", func() {
+	It("continues validation when pull secret is not detected", func() {
 		clusterInstance.Spec.PullSecretRef = corev1.LocalObjectReference{Name: doesNotExist}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
-		Expect(err).To(MatchError(ContainSubstring("failed to validate Pull Secret")))
+		err := Validate(ctx, c, testLogger, clusterInstance)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("fails validation due to invalid cluster-level installConfigOverrides JSON-formatted strings", func() {
 		clusterInstance.Spec.InstallConfigOverrides = "foobar"
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("installConfigOverrides is not a valid JSON-formatted string")))
 	})
 
 	It("fails validation due to invalid cluster-level ignitionConfigOverride JSON-formatted strings", func() {
 		clusterInstance.Spec.IgnitionConfigOverride = "{foo:bar}"
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("cluster-level ignitionConfigOverride is not a valid JSON-formatted string")))
 	})
 
 	It("fails validation when an ExtraManifest reference does not exist", func() {
 		clusterInstance.Spec.ExtraManifestsRefs = []corev1.LocalObjectReference{{Name: doesNotExist}}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("failed to retrieve ExtraManifest")))
 	})
 
@@ -148,7 +151,7 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.Nodes[0].TemplateRefs = []v1alpha1.TemplateRef{}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("missing node-level template refs")))
 	})
 
@@ -157,39 +160,39 @@ var _ = Describe("Validate", func() {
 			{Name: doesNotExist, Namespace: testParams.ClusterName}}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("failed to validate node-level TemplateRef")))
 	})
 
-	It("fails validation due to missing BMC credential secret", func() {
+	It("continues validation when BMC credential secret is not detected", func() {
 		clusterInstance.Spec.Nodes[0].BmcCredentialsName = v1alpha1.BmcCredentialsName{Name: doesNotExist}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
-		Expect(err).To(MatchError(ContainSubstring("failed to validate BMC credentials")))
+		err := Validate(ctx, c, testLogger, clusterInstance)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("fails validation due to missing BMC credential secret in referenced Node namespace", func() {
+	It("continues validation when BMC credential secret is not detected in referenced Node namespace", func() {
 		clusterInstance.Spec.Nodes[0].BmcCredentialsName = v1alpha1.BmcCredentialsName{Name: doesNotExist}
 		clusterInstance.Spec.Nodes[0].HostRef = &v1alpha1.HostRef{Name: "node1", Namespace: "foobar"}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
-		Expect(err).To(MatchError(ContainSubstring("failed to validate BMC credentials")))
+		err := Validate(ctx, c, testLogger, clusterInstance)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("fails validation due to invalid node-level installerArgs JSON-formatted strings", func() {
 		clusterInstance.Spec.Nodes[0].InstallerArgs = "{foo:bar}"
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("installerArgs is not a valid JSON-formatted string")))
 	})
 
 	It("fails validation due to invalid node-level ignitionConfigOverride JSON-formatted strings", func() {
 		clusterInstance.Spec.Nodes[0].IgnitionConfigOverride = "{foo:bar}"
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 
 		Expect(err).To(MatchError(ContainSubstring("ignitionConfigOverride is not a valid JSON-formatted string")))
 	})
@@ -198,7 +201,7 @@ var _ = Describe("Validate", func() {
 		clusterInstance.Spec.Nodes[0].Role = "worker"
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err).To(MatchError(ContainSubstring("at least 1 control-plane agent is required")))
 	})
 
@@ -218,7 +221,7 @@ var _ = Describe("Validate", func() {
 					{Name: testParams.NodeTemplateRef, Namespace: testParams.ClusterName}}}}
 		Expect(c.Create(ctx, clusterInstance)).To(Succeed())
 
-		err := Validate(ctx, c, clusterInstance)
+		err := Validate(ctx, c, testLogger, clusterInstance)
 		Expect(err.Error()).To(ContainSubstring("single node OpenShift cluster-type must have exactly 1 control-plane agent"))
 	})
 })

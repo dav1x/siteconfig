@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -27,7 +29,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-func validateResources(ctx context.Context, c client.Client, clusterInstance *v1alpha1.ClusterInstance) error {
+func validateResources(
+	ctx context.Context,
+	c client.Client,
+	log *zap.Logger,
+	clusterInstance *v1alpha1.ClusterInstance,
+) error {
 	if clusterInstance.Spec.ClusterImageSetNameRef == "" {
 		return fmt.Errorf("clusterImageSetNameRef cannot be empty")
 	}
@@ -39,12 +46,14 @@ func validateResources(ctx context.Context, c client.Client, clusterInstance *v1
 			clusterInstance.Spec.ClusterImageSetNameRef, err)
 	}
 
-	// Check that pull secret exists in cluster namespace
+	// Check that pull secret exists in cluster namespace; continue if not detected
 	pullSecret := &corev1.Secret{}
 	key = types.NamespacedName{Name: clusterInstance.Spec.PullSecretRef.Name, Namespace: clusterInstance.Namespace}
 	if err := c.Get(ctx, key, pullSecret); err != nil {
-		return fmt.Errorf("failed to validate Pull Secret: [%s in namespace %s], err: %w",
-			key.Name, key.Namespace, err)
+		log.Info("Pull Secret not detected; continuing validation",
+			zap.String("name", key.Name),
+			zap.String("namespace", key.Namespace),
+			zap.Error(err))
 	}
 
 	// If extraManifests are defined - check that they exist
@@ -59,7 +68,7 @@ func validateResources(ctx context.Context, c client.Client, clusterInstance *v1
 		}
 	}
 
-	// Check that node BMC secrets exist in namespace
+	// Check that node BMC secrets exist in namespace; continue if not detected
 	for _, node := range clusterInstance.Spec.Nodes {
 		bmcCredentialNS := clusterInstance.Namespace
 		if node.HostRef != nil {
@@ -68,9 +77,11 @@ func validateResources(ctx context.Context, c client.Client, clusterInstance *v1
 		key = types.NamespacedName{Name: node.BmcCredentialsName.Name, Namespace: bmcCredentialNS}
 		bmcSecret := &corev1.Secret{}
 		if err := c.Get(ctx, key, bmcSecret); err != nil {
-			return fmt.Errorf(
-				"failed to validate BMC credentials: %s in namespace %s [Node: Hostname=%s], err: %w",
-				node.BmcCredentialsName.Name, bmcCredentialNS, node.HostName, err)
+			log.Info("BMC credentials Secret not detected; continuing validation",
+				zap.String("name", node.BmcCredentialsName.Name),
+				zap.String("namespace", bmcCredentialNS),
+				zap.String("hostname", node.HostName),
+				zap.Error(err))
 		}
 	}
 
@@ -117,13 +128,18 @@ func validateTemplateRefs(ctx context.Context, c client.Client, clusterInstance 
 }
 
 // Validate checks the given ClusterInstance, returns an error if validation fails, returns nil if it succeeds
-func Validate(ctx context.Context, c client.Client, clusterInstance *v1alpha1.ClusterInstance) error {
+func Validate(
+	ctx context.Context,
+	c client.Client,
+	log *zap.Logger,
+	clusterInstance *v1alpha1.ClusterInstance,
+) error {
 
 	if clusterInstance.Spec.ClusterName == "" {
 		return fmt.Errorf("missing cluster name")
 	}
 
-	if err := validateResources(ctx, c, clusterInstance); err != nil {
+	if err := validateResources(ctx, c, log, clusterInstance); err != nil {
 		return fmt.Errorf("resource validation failed: %w", err)
 	}
 

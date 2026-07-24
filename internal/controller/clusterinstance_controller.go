@@ -496,7 +496,7 @@ func (r *ClusterInstanceReconciler) handleValidate(
 
 	newCond := metav1.Condition{Type: string(v1alpha1.ClusterInstanceValidated)}
 	log.Info("Starting validation")
-	err := ci.Validate(ctx, r.Client, clusterInstance)
+	err := ci.Validate(ctx, r.Client, log, clusterInstance)
 	if err != nil {
 		log.Error("ClusterInstance validation failed due to error", zap.Error(err))
 
